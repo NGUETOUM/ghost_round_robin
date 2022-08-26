@@ -1062,3 +1062,11 @@ py_binary(
         "@linux//:libbpf",
     ],
 )
+
+py_binary(
+    name = "python_rr",
+    srcs = ["PythonRoundRobin/python_rr.py"],
+    data = [":python_module",
+        "@linux//:libbpf",
+    ],
+)
