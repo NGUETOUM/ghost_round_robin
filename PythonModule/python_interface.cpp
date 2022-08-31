@@ -6,6 +6,8 @@
 namespace py = pybind11;
 
 #include "lib/agent.h"
+#include "kernel/ghost_uapi.h"
+#include "lib/enclave.h"
 
 namespace ghost {
 
@@ -49,16 +51,16 @@ PyAgentConfig getConfig() {
   return config;
 }
 
-/*PyGlobalAgentConfig getGlobalConfig() {
-  PyGlobalAgentConfig config;
+PyGlobalAgentConfig getGlobalConfig() {
+  int global_cpu = GetCpu(1).id();
+  int64_t preemption_time_slice = absl::ToInt64Seconds(absl::Milliseconds(50));
+  PyGlobalAgentConfig config(global_cpu, preemption_time_slice);
   Topology* topology = MachineTopology();
 
   config.topology_ = topology;
   config.cpus_ = topology->all_cpus();
-  config.global_cpu = GetCpu(1);
-  config.preemption_time_slice = absl::Milliseconds(50);
   return config;
-}*/
+}
 
 
 CpuList SingleCpu(Cpu const& cpu) {
@@ -67,6 +69,14 @@ CpuList SingleCpu(Cpu const& cpu) {
 
 Cpu GetCpu(int cpu) {
   return MachineTopology()->cpu(cpu);
+}
+
+bool txnReqEqualToGHOST_TXN_COMPLETE(RunRequest req){
+  if(req.state() == GHOST_TXN_COMPLETE){
+    return true;
+  }else{
+    return false;
+  }
 }
 
 const ghost_msg_payload_task_new* cast_payload_new(void* payload) {

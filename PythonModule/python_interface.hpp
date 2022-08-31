@@ -7,6 +7,8 @@ namespace py = pybind11;
 
 #include "lib/agent.h"
 #include "lib/scheduler.h"
+#include "kernel/ghost_uapi.h"
+#include "lib/enclave.h"
 
 namespace ghost {
 
@@ -23,13 +25,19 @@ class PyAgentConfig : public AgentConfig {
   py::object pydata;
 };
 
-class PyGlobalAgentConfig : public AgentConfig{
+class PyGlobalAgentConfig : public PyAgentConfig{
 public:
-  py::object pydata;
+  PyGlobalAgentConfig(int global_cpu, int64_t preemption_time_slice)
+  : global_cpu(global_cpu), preemption_time_slice(preemption_time_slice){}
+
+  int global_cpu;
+  int64_t preemption_time_slice;
 };
 
 #define FULLAGENT_T py::object//FullAgent<LocalEnclave, PyAgentConfig>
 #define MAKEFULLAGENT_T std::function < FULLAGENT_T (PyAgentConfig) >
+
+
 
 class PyWrapAgentConfig : public AgentConfig {
   PyAgentConfig config;
@@ -41,6 +49,8 @@ class PyWrapAgentConfig : public AgentConfig {
   FULLAGENT_T make();
 };
 
+
+
 class WrapFullAgent {
  public:
   py::object py_agent;
@@ -49,6 +59,7 @@ class WrapFullAgent {
 
   void RpcHandler(int64_t req, const AgentRpcArgs& args, AgentRpcResponse& response);
 };
+
 
 extern template struct Task<LocalStatusWord>;
 extern template class TaskAllocator<PyTask>;
@@ -64,9 +75,12 @@ CpuList GetEmptyCpuList();
 
 PyAgentConfig getConfig();
 
+
 CpuList SingleCpu(Cpu const&);
 
 Cpu GetCpu(int cpu);
+
+bool txnReqEqualToGHOST_TXN_COMPLETE(RunRequest req);
 
 const ghost_msg_payload_task_new* cast_payload_new(void* payload);
 const ghost_msg_payload_task_wakeup* cast_payload_wakeup(void* payload);

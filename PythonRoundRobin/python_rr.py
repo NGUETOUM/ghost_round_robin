@@ -5,10 +5,10 @@ print("Importing bindings: OK")
 
 import queue
 import time
-from queue import PriorityQueue
-from goto import with_goto
 
 print("Topology:", ", ".join((str([s.id() for s in c.siblings().ToVector()]) for c in ghost.GetTopoCpuList().ToVector())))
+
+nurse = []
 
 kBlocked = 0
 kQueued = 1
@@ -25,26 +25,15 @@ class TaskData:
         self.cpu = -1
         self.preempted = False
         self.prio_boost = False
-        self.qos = 0
         self.has_work = False
         self.runtime = 0
         self.elapsed_runtime = 0
         self.last_ran = time.time()
 
-    def attach_data(task):
-        if type(task.pydata) is not TaskData: task.pydata = TaskData()
+def attach_data(task):
+    if type(task.pydata) is not TaskData: task.pydata = TaskData()
 
-    def SetRuntime(task, newRuntime, update_elapsed_runtime):
-        if newRuntime > self.runtime:
-            if update_elapsed_runtime:
-                task.pydata.elapsed_runtime += new_runtime - task.pydata.runtime
-            task.pydata.runtime = new_runtime
-    pass
 
-    def UpdateRuntime(task):
-        runtime = task.status_word.runtime
-        SetRuntime(self, runtime, True)
-        pass
 
 class CpuState:
     def __init__(self):
@@ -53,22 +42,25 @@ class CpuState:
         self.agent = None
 
 class PyScheduler(ghost.BasicDispatchScheduler_PyTask_):
-    def __init__(self, enclave, cpulist, global_cpu, preemption_time_slice):
-        print("Hello word")
+    def __init__(self, enclave, cpulist, global_cpu, preemption_time_slice_):
         self.allocator_ = ghost.SingleThreadMallocTaskAllocator_PyTask_()
-        ghost.BasicDispatchScheduler_PyTask_.__init__(self, enclave, self.allocator_, cpulist, self.allocator_)
+        ghost.BasicDispatchScheduler_PyTask_.__init__(self, enclave, cpulist, self.allocator_)
         node = 0
-        self.default_channel_ = ghost.LocalChannel(ghost.GHOST_MAX_QUEUE_ELEMS, node)
-        self.preemption_time_slice = preemption_time_slice
-        self.run_queue = queue.PriorityQueue()
+        self.default_channel_ = ghost.LocalChannel(ghost.GHOST_MAX_QUEUE_ELEMS, node, ghost.GetEmptyCpuList())
+        self.global_cpu = global_cpu
+        self.preemption_time_slice_ = preemption_time_slice_
+        self.run_queue = queue.deque()
+        self.blocked_queue = queue.deque()
         self.num_tasks_ = 0
         self.in_discovery_ = False
         self.yielding_tasks_ = queue.deque()
-        if not self.cpus().IsSet():
+        self.cpu_states = [None for _ in range(len(self.cpus().ToVector())+1)]
+        if not self.cpus().IsSet(global_cpu):
             if self.cpus().Front().isValid():
                 self.global_cpu = self.cpus().Front().id()
 
-        self.cpu_states = [None for _ in range(len(self.cpus().ToVector())+1)]
+        for cpu in self.cpus().ToVector():
+            self.cpu_states[cpu.id()] = CpuState()
 
 
     def cpu_state_of(self, task):
@@ -82,49 +74,58 @@ class PyScheduler(ghost.BasicDispatchScheduler_PyTask_):
         for cpu in self.cpus().ToVector():
             cs = self.cpu_states[cpu.id()]
             cs.agent = self.enclave().GetAgent(cpu)
+            print("Agent is ready")
             if cs.agent != None:
                 check = True
-
         if check == False:
             print("No GlobalAgent is ready")
-            exit()
+
 
     def Empty(self):
         return self.num_tasks_ == 0
 
     def Available(self, cpu):
-        cs = self.cpu_states[cpu]
+        cs = self.cpu_states[cpu.id()]
         return cs.agent.cpu_avail()
 
     def GetDefaultChannel(self):
         return self.default_channel_
 
-    def enqueue(self, task):
-        if not task.has_work:
+    def Enqueue(self, task):
+        if not task.pydata.has_work:
             task.pydata.run_state = kPaused
             return
 
         task.pydata.run_state = kQueued
-        if not task.pydata.prio_boost:
-            self.run_queue.put(task.pydata.qos, task)
-        else:
-            task.pydata.qos.qos = 0
-            self.run_queue.put(task.pydata.qos, task)
-        self.run_queue.queue.sort()
+        if not task in self.run_queue:
+            if task.pydata.prio_boost:
+                self.run_queue.appendleft(task)
+            else:
+                self.run_queue.append(task)
 
-    def dequeue(self):
-        if self.run_queue.queue.empty(): return None
-        tuple = self.run_queue.queue[0]
-        task = tuple[1]
+    def Dequeue(self):
+        if len(self.run_queue) == 0: return None
+        task = self.run_queue.popleft()
         if task != None and task.pydata.has_work != False:
             return task
         return None
 
     def RunqueueSize(self):
-        return len(self.run_queue.queue)
+        return len(self.run_queue)
 
-    def UpdateTaskRuntime(task, new_runtime, update_elapsed_runtime):
-        task.SetRuntime(new_runtime, update_elapsed_runtime)
+    def SetRuntime(self, task, new_runtime, update_elapsed_runtime):
+        if new_runtime > task.pydata.runtime:
+            if update_elapsed_runtime:
+                task.pydata.elapsed_runtime += new_runtime - task.pydata.runtime
+        task.pydata.runtime = new_runtime
+
+
+    def UpdateRuntime(self, task):
+        runtime = task.status_word.runtime()
+        self.SetRuntime(task, runtime, True)
+
+    def UpdateTaskRuntime(self, task, new_runtime, update_elapsed_runtime):
+        self.SetRuntime(task, new_runtime, update_elapsed_runtime)
 
     def DiscoveryStart(self):
         self.in_discovery_ = True
@@ -139,98 +140,101 @@ class PyScheduler(ghost.BasicDispatchScheduler_PyTask_):
         self.global_cpu = cpu
 
     def Peek(self):
-        if self.run_queue.queue.empty(): return None
-        tuple = self.run_queue.queue[0]
-        task = tuple[1]
+        if len(self.run_queue) == 0: return None
+        task = self.run_queue.popleft()
         if task.pydata.has_work == True:
             return task
         return None
 
     def RemoveFromRunqueue(self, task):
         if task.pydata.run_state == kQueued:
-            queue = queue.deque()
-            for i in range(len(self.run_queue.queue)):
-                queue.appendleft(self.run_queue.get())
-            tuple = (task.pydata.qos, task)
-            queue.remove(tuple)
-            for i in range(len(queue)):
-                self.run_queue.put(queue.popleft())
-            self.run_queue.queue.sort()
-        return
+            self.run_queue.remove(task)
 
     def TaskNew(self, task, msg):
         attach_data(task)
+        print("Task New")
+        print(task.gtid.tid())
         payload = ghost.cast_payload_new(msg.payload())
-        UpdateTaskRuntime(task, payload.runtime, False)
+        runtime = payload.runtime
+        self.UpdateTaskRuntime(task, runtime, False)
         task.seqnum = msg.seqnum()
         task.pydata.run_state = kBlocked
         task.pydata.has_work = True
-        task.pydata.qos = self.num_tasks_
-        if payload.runnable:
-            Enqueue(self, task)
 
-        self.num_tasks_ += self.num_tasks_
+        if payload.runnable:
+            self.Enqueue(task)
+
+        self.num_tasks_ = self.num_tasks_ + 1
+
 
     def TaskRunnable(self, task, msg):
+        print("Task Runnable")
         payload = ghost.cast_payload_wakeup(msg.payload())
-        if task.pydata.run_state == kBlocked:
+        if task.pydata.run_state == kBlocked and task in self.blocked_queue:
             task.pydata.prio_boost = not payload.deferrable
-            Enqueue(self, task)
+            self.Enqueue(task)
+            self.blocked_queue.remove(task)
 
     def TaskDeparted(self, task, msg):
+        print("Task Departed")
         if task.pydata.run_state == kOnCpu:
-            cs = cpu_state_of(self, task)
+            cs = self.cpu_state_of(task)
             if cs.current == task:
                 cs.current = None
         elif task.pydata.run_state == kQueued:
-            RemoveFromRunqueue(self, task)
+            self.RemoveFromRunqueue(task)
 
         self.allocator().FreeTask(task)
-        self.num_tasks_ -= self.num_tasks_
+        self.num_tasks_ = self.num_tasks_ - 1
 
     def TaskDead(self, task, msg):
+        print("Task Dead")
         payload = ghost.cast_payload_dead(msg.payload())
         if task.pydata.run_state == kBlocked:
             self.allocator().FreeTask(task)
-            self.num_tasks_ -= self.num_tasks_
+            self.num_tasks_ = self.num_tasks_ - 1
 
     def TaskYield(self, task, msg):
-        payload = ghost.cast_payload_preempt(msg.payload())
+        print("Task Yield")
+        payload = ghost.cast_payload_yield(msg.payload())
         if payload.runtime == task.status_word.runtime():
             if task.pydata.run_state == kOnCpu:
-                UpdateTaskRuntime(task, payload.runtime, True)
-                cs = cpu_state_of(self, task)
+                self.UpdateTaskRuntime(task, payload.runtime, True)
+                cs = self.cpu_state_of(task)
                 if cs.current == task:
                     cs.current = None
-                    Yield(self, task)
+                    self.Yield(task)
 
     def TaskBlocked(self, task, msg):
+        print("Task Blocked")
+        print(task.gtid.tid())
         payload = ghost.cast_payload_blocked(msg.payload())
         if payload.runtime == task.status_word.runtime():
             if task.pydata.run_state == kOnCpu:
-                UpdateTaskRuntime(task, payload.runtime, True)
-                cs = cpu_state_of(self, task)
+                self.UpdateTaskRuntime(task, payload.runtime, True)
+                cs = self.cpu_state_of(task)
                 if cs.current == task:
                     cs.current = None
-            elif task.pydata.run_state == kQueued:
-                RemoveFromRunqueue(self, task)
         task.pydata.run_state = kBlocked
+        task.pydata.prio_boost = False
+        self.blocked_queue.appendleft(task)
 
 
     def TaskPreempted(self, task, msg):
+        print("Task Preempt")
+        print(task.gtid.tid())
         payload = ghost.cast_payload_preempt(msg.payload())
         if payload.runtime == task.status_word.runtime():
             task.pydata.preempted = True
             task.pydata.prio_boost = True
             if task.pydata.run_state == kOnCpu:
-                UpdateTaskRuntime(task, payload.runtime, True)
-                cs = cpu_state_of(self, task)
+                self.UpdateTaskRuntime(task, payload.runtime, True)
+                cs = self.cpu_state_of(task)
                 if cs.current == task:
                     cs.current = None
-                    Enqueue(self, task)
+                    self.Enqueue(task)
             elif task.pydata.run_state == kQueued:
-                RemoveFromRunqueue(self, task)
-                Enqueue(self, task)
+                self.Enqueue(task)
 
 
     def Yield(self, task):
@@ -240,14 +244,18 @@ class PyScheduler(ghost.BasicDispatchScheduler_PyTask_):
 
     def Unyield(self, task):
         if task.pydata.run_state == kYielding:
+            tmp_yielding_task = queue.deque()
             for i in range(len(self.yielding_tasks_)):
                 tmp_task = self.yielding_tasks_.popleft()
                 if tmp_task == task:
-                    break
+                    self.Enqueue(task)
                 else:
-                    self.yielding_tasks_.append(tmp_task)
+                    tmp_yielding_task.appendleft(tmp_task)
 
-        Enqueue(self, task)
+            for i in range(len(tmp_yielding_task)):
+                self.yielding_tasks_.appendleft(tmp_yielding_task.popleft())
+
+
 
     def UnscheduleTask(self, task):
            if task != None:
@@ -259,135 +267,118 @@ class PyScheduler(ghost.BasicDispatchScheduler_PyTask_):
                     opts.commit_flags = ghost.COMMIT_AT_TXN_COMMIT
                     req.Open(opts)
                     if req.Commit():
-                        cs = cpu_state_of(self, task)
+                        cs = self.cpu_state_of(task)
                         cs.current = None
-                        task.pydata.run_state = kPaused
+                        task.pydata.run_state = kOnCpu
 
-    def SkipForSchedule(self, iteration, cpu):
-           cs = cpu_state_of(self, task)
-           if (not Available(cpu)) or (cpu.id() == GetGlobalCPUId()): return True
+    def SkipForSchedule(self, cpu):
+           cs = self.cpu_states[cpu.id()]
+           if (not self.Available(cpu)) or (cpu.id() == self.GetGlobalCPUId()): return True
 
-           if (iteration == 0) and cs.current: return True
-
-           if (iteration == 1) and cs.next: return True
+           if cs.current or cs.next: return True
 
            return False
 
     def PickNextGlobalCPU(self, agent_barrier):
            for cpu in self.cpus().ToVector():
-                if Available(cpu) and (cpu.id() != GetGlobalCPUId()):
-                    cs = self.cpu_states[cpu]
+                if self.Available(cpu) and cpu.id() != self.GetGlobalCPUId():
+                    cs = self.cpu_states[cpu.id()]
                     prev_task = cs.current
                     if prev_task != None:
                         if prev_task.pydata.run_state == kOnCpu:
+                            self.UnscheduleTask(prev_task)
+                            self.Yield(prev_task)
                             return
-                    SetGlobalCPU(cpu)
+                    self.SetGlobalCPU(cpu.id())
                     self.enclave().GetAgent(cpu).Ping()
                     break
 
-    def GlobalSchedule(agent_sw, agent_barrier):
-           print("Nothing to schedule")
+    def GlobalSchedule(self, agent_sw, agent_barrier):
            open_cpus = ghost.GetEmptyCpuList()
-           now = time.time()
-           for x in range(2):
-                updated_cpus = ghost.GetEmptyCpuList()
-                for cpu in self.cpus().ToVector():
-                    cs = self.cpu_states[cpu]
-                    if SkipForSchedule(i, cpu):
-                        continue
-                    label .again
-                    if cs.current:
-                        elapsed_runtime = now - cs.current.pydata.last_ran
-                        peek = Peek(self)
-                        should_preempt = False
-                        if peek:
-                            current_qos = cs.current.pydata.qos
-                            peek_qos = peek.pydata.qos
-                            if current_qos < peek_qos:
-                                should_preempt = True
-                            elif current_qos == peek_qos:
-                                if elapsed_runtime >= self.preemption_time_slice_: should_preempt = True
+           to_run = None
 
-                        if not should_preempt: continue
+           updated_cpus = ghost.GetEmptyCpuList()
+           for cpu in self.cpus().ToVector():
+                   cs = self.cpu_states[cpu.id()]
+                   if not self.SkipForSchedule(cpu):
+                       to_run = self.Dequeue()
+                       if to_run:
+                           cs.next = to_run
+                           updated_cpus.Set(cpu.id())
 
-                    to_run = Dequeue()
-                    if not to_run: break
-
-                    if to_run.status_word.on_cpu():
-                        Yied(self, to_run)
-                        goto .again
-
-                    cs.next = to_run
-                    updated_cpus.Set(cpu.id())
-
-                for cpu in updated_cpus:
-                    cs = self.cpu_states[cpu]
-                    next = cs.next
-                    if next != None:
-                        if cs.current == next: continue
-                        req = self.enclave().GetRunRequest(cpu)
-                        opts = ghost.RunRequestOptions()
-                        opts.target = next.gtid
-                        opts.target_barrier = next.seqnum
-                        opts.commit_flags = ghost.COMMIT_AT_TXN_COMMIT
-                        req.Open(opts)
-                        open_cpus.Set(cpu.id())
+           for cpu in updated_cpus.ToVector():
+               cs = self.cpu_states[cpu.id()]
+               next = cs.next
+               if next != None:
+                   if cs.current == next: continue
+                   req = self.enclave().GetRunRequest(cpu)
+                   opts = ghost.RunRequestOptions()
+                   opts.target = next.gtid
+                   opts.target_barrier = next.seqnum
+                   opts.commit_flags = ghost.COMMIT_AT_TXN_COMMIT
+                   req.Open(opts)
+                   open_cpus.Set(cpu.id())
 
            if not open_cpus.Empty(): self.enclave().CommitRunRequests(open_cpus)
-
-           for cpu in open_cpus:
-                cs = self.cpu_states[cpu]
+           for cpu in open_cpus.ToVector():
+                cs = self.cpu_states[cpu.id()]
                 next = cs.next
                 cs.next = None
                 req = self.enclave().GetRunRequest(cpu)
                 if req.committed():
-                    if req.state() == ghost.GHOST_TXN_COMPLETE:
+                    if ghost.txnReqEqualToGHOST_TXN_COMPLETE(req):
                         if cs.current:
                             prev = cs.current
                             if prev.pydata.run_state == kOnCpu:
-                                UpdateRuntime(prev)
-                                Enqueue(self, prev)
+                                self.UpdateRuntime(prev)
+                                self.Enqueue(prev)
 
                         cs.current = next
                         next.pydata.run_state = kOnCpu
                         next.pydata.cpu = cpu.id()
-                        next.pydata.preempted = false
-                        next.prio_boost = false
+                        next.pydata.preempted = False
+                        next.pydata.prio_boost = False
+                    else:
+                        self.Enqueue(next)
 
-                    else: Enqueue(self, prev)
+           if len(self.yielding_tasks_) != 0:
 
-           if not self.yielding_tasks_.empty():
-                 for i in range(len(self.yielding_tasks_)):
-                        tmp_task = self.yielding_tasks_.pop()
-                        if tmp_task.pydata.run_state == kYielding: Enqueue(self, tmp_task)
+               for i in range(len(self.yielding_tasks_)):
+                        tmp_task = self.yielding_tasks_.popleft()
+                        if tmp_task.pydata.run_state == kYielding: self.Enqueue(tmp_task)
+
 
 
 class PyAgent(ghost.LocalAgent):
     def __init__(self, enclave, cpu, scheduler):
         ghost.LocalAgent.__init__(self, enclave, cpu)
+        self.enclave_ = enclave
         self.scheduler_ = scheduler
 
     def AgentThread(self):
+        channel = self.scheduler_.GetDefaultChannel()
         self.gtid().assign_name("Agent:"+str(self.cpu().id()))
         self.SignalReady()
         self.WaitForEnclaveReady()
+
         while not self.Finished():
             agent_barrier = self.status_word().barrier()
             if self.cpu().id() != self.scheduler_.GetGlobalCPUId():
-                req = self.enclave().GetRunRequest(self.cpu())
+                req = self.enclave_.GetRunRequest(self.cpu())
                 req.LocalYield(agent_barrier, 0)
             else:
                 if self.boosted_priority():
                     self.scheduler_.PickNextGlobalCPU(agent_barrier)
                     continue
 
-            msg = ghost.Peek(self.scheduler_.default_channel_)
-            while not msg.empty():
-                self.DispatchMessage(msg)
-                ghost.Consume(self.scheduler_.default_channel_, msg)
-                msg = ghost.Peek(self.scheduler_.default_channel_)
-                self.scheduler_.GlobalSchedule(self.status_word(), agent_barrier)
+                msg = self.scheduler_.default_channel_.Peek()
+                while not msg.empty():
+                    print(msg.type())
+                    self.scheduler_.DispatchMessage(msg)
+                    self.scheduler_.default_channel_.Consume(msg)
+                    msg = self.scheduler_.default_channel_.Peek()
 
+                self.scheduler_.GlobalSchedule(self.status_word(), agent_barrier)
 
     def AgentScheduler(self):
         return self.scheduler_
@@ -396,15 +387,13 @@ class FullPyAgent(ghost.FullAgent_LocalEnclave_PyAgentConfig_):
     def __init__(self, config):
         ghost.FullAgent_LocalEnclave_PyAgentConfig_.__init__(self, config)
         global_cpu = ghost.GetCpu(1).id()
-        preemption_time_slice = 5000000000
-        scheduler_ = PyScheduler(self.enclave_, self.enclave_.cpus(), global_cpu, preemption_time_slice)
-
-
+        preemption_time_slice_ = 0.0010657310485839850
+        self.scheduler_ = PyScheduler(self.enclave_, self.enclave_.cpus(), global_cpu, preemption_time_slice_)
         self.StartAgentTasks()
         self.enclave_.Ready()
 
     def __del__(self):
-        #self.scheduler_.ValidatePreExitState()
+        self.scheduler_.ValidatePreExitState()
         self.TerminateAgentTasks()
 
     def MakeAgent(self, cpu):

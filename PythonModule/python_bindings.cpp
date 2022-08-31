@@ -1212,6 +1212,7 @@ PYBIND11_MODULE(libpython_module, PB__m) {
 
     py::class_<LocalChannel, Channel, TrPB__LocalChannel> PB__LocalChannel(PB__ghost, "LocalChannel"); {
       PB__LocalChannel.def(py::init<int, int, ghost::CpuList>());
+      PB__LocalChannel.def(py::init<int, int>());
       PB__LocalChannel.def("Peek", &LocalChannel::Peek);
       PB__LocalChannel.def("Consume", &LocalChannel::Consume);
       PB__LocalChannel.def("max_elements", &LocalChannel::max_elements);
@@ -1387,6 +1388,7 @@ PYBIND11_MODULE(libpython_module, PB__m) {
     }
 
     py::class_<SingleThreadMallocTaskAllocator<PyTask>, TaskAllocator<PyTask>, TrPB__SingleThreadMallocTaskAllocator_PyTask_, std::shared_ptr<SingleThreadMallocTaskAllocator<PyTask>>> PB__SingleThreadMallocTaskAllocator_PyTask_(PB__ghost, "SingleThreadMallocTaskAllocator_PyTask_"); {
+      PB__SingleThreadMallocTaskAllocator_PyTask_.def(py::init<>());
       PB__SingleThreadMallocTaskAllocator_PyTask_.def("ForEachTask", py::overload_cast<ghost::TaskAllocator<PyTask>::TaskCallbackFunc>(&SingleThreadMallocTaskAllocator<PyTask>::ForEachTask));
       PB__SingleThreadMallocTaskAllocator_PyTask_.def("GetTask", py::overload_cast<ghost::Gtid>(&SingleThreadMallocTaskAllocator<PyTask>::GetTask));
       PB__SingleThreadMallocTaskAllocator_PyTask_.def("GetTask", py::overload_cast<ghost::Gtid, ghost_sw_info>(&SingleThreadMallocTaskAllocator<PyTask>::GetTask));
@@ -1545,7 +1547,8 @@ PYBIND11_MODULE(libpython_module, PB__m) {
     PB__ghost.def("getConfig", &getConfig);
     PB__ghost.def("SingleCpu", &SingleCpu);
     PB__ghost.def("GetCpu", &GetCpu);
-
+    PB__ghost.def("GetEmptyCpuList", &GetEmptyCpuList);
+    PB__ghost.def("txnReqEqualToGHOST_TXN_COMPLETE", &txnReqEqualToGHOST_TXN_COMPLETE);
 
     PB__ghost.attr("GHOST_MAX_QUEUE_ELEMS") = py::int_(GHOST_MAX_QUEUE_ELEMS);
     PB__ghost.attr("COMMIT_AT_TXN_COMMIT") = py::int_(COMMIT_AT_TXN_COMMIT);
