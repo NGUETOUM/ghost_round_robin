@@ -29,7 +29,7 @@
 ABSL_FLAG(int32_t, firstcpu, 1, "First cpu to start scheduling from.");
 ABSL_FLAG(int32_t, globalcpu, -1,
           "Global cpu. If -1, then defaults to <firstcpu>)");
-ABSL_FLAG(int32_t, ncpus, 2, "Schedule on <ncpus> starting from <firstcpu>");
+ABSL_FLAG(int32_t, ncpus, 7, "Schedule on <ncpus> starting from <firstcpu>");
 ABSL_FLAG(std::string, enclave, "", "Connect to preexisting enclave directory");
 ABSL_FLAG(absl::Duration, preemption_time_slice, absl::Microseconds(50),
           "Round Robin preemption time slice");

@@ -22,7 +22,7 @@
 #include "lib/enclave.h"
 #include "schedulers/fifo/per_cpu/fifo_scheduler.h"
 
-ABSL_FLAG(std::string, ghost_cpus, "1-5", "cpulist");
+ABSL_FLAG(std::string, ghost_cpus, "1-7", "cpulist");
 ABSL_FLAG(std::string, enclave, "", "Connect to preexisting enclave directory");
 
 namespace ghost {

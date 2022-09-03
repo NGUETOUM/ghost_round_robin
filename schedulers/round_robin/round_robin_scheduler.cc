@@ -199,7 +199,6 @@ void RoundRobinScheduler::TaskDeparted(RoundRobinTask* task, const Message& msg)
 void RoundRobinScheduler::TaskDead(RoundRobinTask* task, const Message& msg) {
   CHECK_EQ(task->run_state, RoundRobinTask::RunState::kBlocked);
   allocator()->FreeTask(task);
-
   num_tasks_--;
 }
 

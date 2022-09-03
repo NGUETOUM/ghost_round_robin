@@ -26,7 +26,7 @@
 #include "lib/topology.h"
 #include "schedulers/sol/sol_scheduler.h"
 
-ABSL_FLAG(std::string, ghost_cpus, "1-2", "cpulist");
+ABSL_FLAG(std::string, ghost_cpus, "1-7", "cpulist");
 ABSL_FLAG(int32_t, globalcpu, -1,
           "Global cpu. If -1, then defaults to the first cpu in <cpus>");
 ABSL_FLAG(std::string, enclave, "", "Connect to preexisting enclave directory");
