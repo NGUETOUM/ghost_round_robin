@@ -151,6 +151,9 @@ class PyScheduler(ghost.BasicDispatchScheduler_PyTask_):
         print("Task Dead")
         if task.pydata.run_state == kBlocked:
             self.allocator().FreeTask(task)
+            if task in self.blocked_queue: self.blocked_queue.remove(task)
+            if task in self.yielding_tasks_: self.yielding_tasks_.remove(task)
+            if task in self.run_queue: self.run_queue.remove(task)
             self.num_tasks_ = self.num_tasks_ - 1
 
     def TaskYield(self, task, msg):

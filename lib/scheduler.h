@@ -147,7 +147,7 @@ class BasicDispatchScheduler : public Scheduler {
 
   void DiscoverTasks() override {
     DiscoveryStart();
-
+    printf("\n In DicoverTasks function \n");
     // The kernel may concurrently modify the SW as we read it.  Many changes
     // involve incrementing the barrier at some point in the future - in
     // particular during task_woken_ghost and when a task blocks.

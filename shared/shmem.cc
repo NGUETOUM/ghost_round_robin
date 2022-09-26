@@ -177,7 +177,7 @@ bool GhostShmem::ConnectShmem(int64_t client_version, const char* suffix,
 
   // Ensure we synchronize on the remote side marking that content is ready
   // before trying to validate.
-  printf("\n Première tentative \n");
+  
   WaitForReady();
 
   CHECK_EQ(hdr_->header_version, kHeaderVersion);

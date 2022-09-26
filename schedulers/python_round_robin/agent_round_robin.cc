@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -22,57 +23,69 @@
 #include "lib/channel.h"
 #include "lib/enclave.h"
 #include "lib/topology.h"
-#include "schedulers/edf/edf_scheduler.h"
+#include "schedulers/python_round_robin/round_robin_scheduler.h"
 
-ABSL_FLAG(std::string, ghost_cpus, "1-2", "cpulist");
-ABSL_FLAG(
-    int32_t, globalcpu, -1,
-    "Global cpu. If -1, then defaults to the lowest CPU in <ghost_cpus>)");
-ABSL_FLAG(bool, ticks, false, "Generate cpu tick messages");
+
+ABSL_FLAG(int32_t, firstcpu, 1, "First cpu to start scheduling from.");
+ABSL_FLAG(int32_t, globalcpu, -1,
+          "Global cpu. If -1, then defaults to <firstcpu>)");
+ABSL_FLAG(int32_t, ncpus, 2, "Schedule on <ncpus> starting from <firstcpu>");
 ABSL_FLAG(std::string, enclave, "", "Connect to preexisting enclave directory");
+ABSL_FLAG(absl::Duration, preemption_time_slice, absl::Microseconds(50),
+          "Round Robin preemption time slice");
 
 namespace ghost {
 
-void ParseGlobalConfig(GlobalConfig* config) {
-  CpuList ghost_cpus =
-      ghost::MachineTopology()->ParseCpuStr(absl::GetFlag(FLAGS_ghost_cpus));
-  // One CPU for the spinning global agent and at least one other for running
-  // scheduled ghOSt tasks.
-  CHECK_GE(ghost_cpus.Size(), 2);
+ void ParseRoundRobinConfig(RoundRobinConfig* config) {
+    int firstcpu = absl::GetFlag(FLAGS_firstcpu);
+    int globalcpu = absl::GetFlag(FLAGS_globalcpu);
+    int ncpus = absl::GetFlag(FLAGS_ncpus);
+    int lastcpu = firstcpu + ncpus - 1;
 
-  int globalcpu = absl::GetFlag(FLAGS_globalcpu);
-  if (globalcpu < 0) {
-    CHECK_EQ(globalcpu, -1);
-    globalcpu = ghost_cpus.Front().id();
+    CHECK_GT(ncpus, 1);
+    CHECK_GE(firstcpu, 0);
+    CHECK_LT(lastcpu, ghost::MachineTopology()->num_cpus());
+
+    if (globalcpu < 0) {
+      CHECK_EQ(globalcpu, -1);
+      absl::SetFlag(&FLAGS_globalcpu, firstcpu);
+      globalcpu = firstcpu;
+    }
+
+    CHECK_GE(globalcpu, firstcpu);
+    CHECK_LE(globalcpu, lastcpu);
+
+    std::vector<int> all_cpus_v;
+    for (int c = firstcpu; c <= lastcpu; c++) {
+        all_cpus_v.push_back(c);
+    }
+
+    Topology* topology = MachineTopology();
+    config->topology_ = topology;
+    config->cpus_ = topology->ToCpuList(std::move(all_cpus_v));
+    config->global_cpu_ = topology->cpu(globalcpu);
+    //config->preemption_time_slice_ = absl::GetFlag(FLAGS_preemption_time_slice);
+
+    std::string enclave = absl::GetFlag(FLAGS_enclave);
+    if (!enclave.empty()) {
+      int fd = open(enclave.c_str(), O_PATH);
+      CHECK_GE(fd, 0);
+      config->enclave_fd_ = fd;
+    }
   }
-  CHECK(ghost_cpus.IsSet(globalcpu));
-
-  Topology* topology = MachineTopology();
-  config->topology_ = topology;
-  config->cpus_ = ghost_cpus;
-  config->global_cpu_ = topology->cpu(globalcpu);
-  config->edf_ticks_ = absl::GetFlag(FLAGS_ticks) ? CpuTickConfig::kAllTicks
-                                                  : CpuTickConfig::kNoTicks;
-
-  std::string enclave = absl::GetFlag(FLAGS_enclave);
-  if (!enclave.empty()) {
-    int fd = open(enclave.c_str(), O_PATH);
-    CHECK_GE(fd, 0);
-    config->enclave_fd_ = fd;
-  }
-}
-
 }  // namespace ghost
 
-int main(int argc, char* argv[]) {
+
+int main(int argc, char* argv[]){
+
   absl::InitializeSymbolizer(argv[0]);
 
   // Override default value of the verbose flag while in active development.
-  ghost::set_verbose(1);
+  ghost::set_verbose(2);
   absl::ParseCommandLine(argc, argv);
 
-  ghost::GlobalConfig config;
-  ghost::ParseGlobalConfig(&config);
+  ghost::RoundRobinConfig config;
+  ghost::ParseRoundRobinConfig(&config);
 
   printf("Core map\n");
 
@@ -87,12 +100,13 @@ int main(int argc, char* argv[]) {
   printf("Initializing...\n");
 
   // Using new so we can destruct the object before printing Done
-  auto uap = new ghost::AgentProcess<ghost::GlobalEdfAgent<ghost::LocalEnclave>,
-                                     ghost::GlobalConfig>(config);
+  auto uap =
+      new ghost::AgentProcess<ghost::FullRoundRobinAgent<ghost::LocalEnclave>,
+                              ghost::RoundRobinConfig>(config);
 
   ghost::Ghost::InitCore();
-
   printf("Initialization complete, ghOSt active.\n");
+
   // When `stdout` is directed to a terminal, it is newline-buffered. When
   // `stdout` is directed to a non-interactive device (e.g, a Python subprocess
   // pipe), it is fully buffered. Thus, in order for the Python script to read
@@ -101,27 +115,20 @@ int main(int argc, char* argv[]) {
   fflush(stdout);
 
   ghost::Notification exit;
-  static bool first = true;
   ghost::GhostSignals::AddHandler(SIGINT, [&exit](int) {
+    static bool first = true;  // We only modify the first SIGINT.
+
     if (first) {
       exit.Notify();
       first = false;
-      return false;  // We'll exit on subsequent signals.
-    }
-    return true;
-  });
-  ghost::GhostSignals::AddHandler(SIGTERM, [&exit](int) {
-    if (first) {
-      exit.Notify();
-      first = false;
-      return false;  // We'll exit on subsequent signals.
+      return false;  // We'll exit on subsequent SIGTERMs.
     }
     return true;
   });
 
   // TODO: this is racy - uap could be deleted already
   ghost::GhostSignals::AddHandler(SIGUSR1, [uap](int) {
-    uap->Rpc(ghost::EdfScheduler::kDebugRunqueue);
+    uap->Rpc(ghost::RoundRobinScheduler::kDebugRunqueue);
     return false;
   });
 
@@ -129,6 +136,10 @@ int main(int argc, char* argv[]) {
 
   delete uap;
 
-  printf("\nDone!\n");
+  printf("Done!\n");
   return 0;
+
+
+
+
 }

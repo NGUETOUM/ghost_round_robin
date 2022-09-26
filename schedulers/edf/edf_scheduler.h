@@ -181,7 +181,7 @@ class EdfScheduler : public BasicDispatchScheduler<EdfTask> {
   void RemoveFromRunqueue(EdfTask* task);
   void UpdateRunqueuePosition(uint32_t pos);
   void CheckRunQueue();
-
+  void DumpAllTasks();
   void GlobalSchedule(const StatusWord& agent_sw,
                       StatusWord::BarrierToken agent_sw_last);
 
@@ -198,6 +198,9 @@ class EdfScheduler : public BasicDispatchScheduler<EdfTask> {
 
   static const int kDebugRunqueue = 1;
 
+  std::vector<std::pair<int,EdfTask*>> tasks_table;
+  EdfTask* findElement(uint32_t sid);
+
  private:
   bool PreemptTask(EdfTask* prev, EdfTask* next,
                    StatusWord::BarrierToken agent_barrier);
@@ -206,7 +209,7 @@ class EdfScheduler : public BasicDispatchScheduler<EdfTask> {
   void Enqueue(EdfTask* task);
   EdfTask* Dequeue();
   EdfTask* Peek();
-  void DumpAllTasks();
+  //void DumpAllTasks();
 
   void UpdateTaskRuntime(EdfTask* task, absl::Duration new_runtime,
                          bool update_elapsed_runtime);
@@ -229,6 +232,7 @@ class EdfScheduler : public BasicDispatchScheduler<EdfTask> {
   std::atomic<int32_t> global_cpu_;
   LocalChannel global_channel_;
   int num_tasks_ = 0;
+  int num_sid_ = 0;
   bool in_discovery_ = false;
   // Heapified runqueue
   std::vector<EdfTask*> run_queue_;

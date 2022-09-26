@@ -61,6 +61,7 @@ class StatusWordTable {
       const std::function<void(ghost_status_word* sw, uint32_t region_id,
                                uint32_t idx)>
           l) {
+            printf("\n We try to scrape the statusword table \n");
     for (int i = 0; i < header_->capacity; ++i) {
       ghost_status_word* sw = get(i);
       if (!(sw->flags & GHOST_SW_F_INUSE)) {

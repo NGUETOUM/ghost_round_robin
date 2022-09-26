@@ -176,6 +176,41 @@ cc_library(
 )
 
 
+cc_binary(
+    name = "agent_round_robin_python",
+    srcs = [
+        "schedulers/python_round_robin/agent_round_robin.cc",
+    ],
+    copts = compiler_flags,
+    visibility = ["//experiments/scripts:__pkg__"],
+    deps = [
+        ":agent",
+        ":python_round_robin_scheduler",
+        "@com_google_absl//absl/debugging:symbolize",
+        "@com_google_absl//absl/flags:parse",
+    ],
+)
+
+
+cc_library(
+    name = "python_round_robin_scheduler",
+    srcs = [
+        "schedulers/python_round_robin/round_robin_scheduler.cc",
+    ],
+    hdrs = [
+        "schedulers/python_round_robin/round_robin_scheduler.h",
+    ],
+    copts = compiler_flags,
+    deps = [
+        ":agent",
+        ":ghost",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/functional:bind_front",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/time",
+    ],
+)
+
 
 cc_library(
     name = "sol_scheduler",
@@ -1066,6 +1101,14 @@ py_binary(
 py_binary(
     name = "python_rr",
     srcs = ["PythonRoundRobin/python_rr.py"],
+    data = [":python_module",
+        "@linux//:libbpf",
+    ],
+)
+
+py_binary(
+    name = "python_fifo_centralised",
+    srcs = ["PythonFifoCentralized/python_fifo_centralised.py"],
     data = [":python_module",
         "@linux//:libbpf",
     ],

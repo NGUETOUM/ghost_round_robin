@@ -124,15 +124,16 @@ bool EdfScheduler::Available(const Cpu& cpu) {
 }
 
 void EdfScheduler::DumpAllTasks() {
-  fprintf(stderr, "task        state       rq_pos  P\n");
-  allocator()->ForEachTask([](Gtid gtid, const EdfTask* task) {
-    absl::FPrintF(stderr, "%-12s%-12s%-8d%c\n", gtid.describe(),
-                  EdfTask::RunStateToString(task->run_state), task->rq_pos,
-                  task->prio_boost ? 'P' : '-');
-    return true;
-  });
 
-  for (auto const& it : orchs_) it.second->DumpSchedParams();
+  fprintf(stderr, "task                    state       cpu       id \n");
+   allocator()->ForEachTask([](Gtid gtid, const EdfTask* task) {
+     absl::FPrintF(stderr, "%-12s         %-12s      %d       %d \n", gtid.describe(),
+                   EdfTask::RunStateToString(task->run_state), task->cpu, gtid.id());
+
+     return true;
+   });
+
+  //for (auto const& it : orchs_) it.second->DumpSchedParams();
 }
 
 void EdfScheduler::DumpState(const Cpu& agent_cpu, int flags) {
@@ -172,7 +173,32 @@ void EdfScheduler::HandleNewGtid(EdfTask* task, pid_t tgid) {
 
   if (orchs_.find(tgid) == orchs_.end()) {
     auto orch = absl::make_unique<Orchestrator>();
-    if (!orch->Init(tgid)) {
+
+    //Read file in /tmp/ghost_fd.txt
+    pid_t main_pid = -1;
+    int main_fd = -1;
+    int index = 0;
+    FILE* fp = NULL;
+    fp = fopen("/tmp/ghost_fd.txt","r");
+    int pid = -1;
+    int fd = -1;
+
+    if (fp != NULL){
+        while (fscanf(fp, "%d %d", &pid, &fd) != EOF){
+            if(index == 0){
+              main_pid = (pid_t)pid;
+            }
+            if((pid_t)pid == tgid){
+              main_fd = fd;
+            }
+          index++;
+        }
+        fclose(fp);
+    }
+
+    printf("\n MAIN PID %d | FD %d \n", main_pid, main_fd);
+
+    if (!orch->Init(/*tgid*/ main_pid)) {
       // If the task's group leader has already exited and closed the PrioTable
       // fd while we are handling TaskNew, it is possible that we cannot find
       // the PrioTable.
@@ -204,6 +230,16 @@ void EdfScheduler::UpdateTaskRuntime(EdfTask* task, absl::Duration new_runtime,
   }
 }
 
+EdfTask* EdfScheduler::findElement(uint32_t sid){
+    for (auto & elem : tasks_table){
+       absl::FPrintF(stderr, "\n On a table %d    %d \n", sid, elem.first);
+       if(sid == elem.first){
+         return elem.second;
+       }
+    }
+    return nullptr;
+}
+
 void EdfScheduler::TaskNew(EdfTask* task, const Message& msg) {
   const ghost_msg_payload_task_new* payload =
       static_cast<const ghost_msg_payload_task_new*>(msg.payload());
@@ -231,6 +267,8 @@ void EdfScheduler::TaskNew(EdfTask* task, const Message& msg) {
       iter->second->GetSchedParams(task->gtid, kSchedCallbackFunc);
     }
   }
+  tasks_table.emplace_back(num_sid_, task);
+  num_sid_++;
 }
 
 void EdfScheduler::TaskRunnable(EdfTask* task, const Message& msg) {
@@ -263,6 +301,7 @@ void EdfScheduler::TaskDeparted(EdfTask* task, const Message& msg) {
 }
 
 void EdfScheduler::TaskDead(EdfTask* task, const Message& msg) {
+  printf("\n The task with id %d is dead \n", task->gtid.id());
   CHECK_EQ(task->run_state, EdfTask::RunState::kBlocked);
   allocator()->FreeTask(task);
 
@@ -555,6 +594,7 @@ void EdfScheduler::UpdateRunqueue(EdfTask* task) {
 
 void EdfScheduler::SchedParamsCallback(Orchestrator& orch,
                                        const SchedParams* sp, Gtid oldgtid) {
+  printf("\n SchedParamsCallback \n");
   Gtid gtid = sp->GetGtid();
 
   // TODO: Get it off cpu if it is running. Assumes that oldgpid wasn't moved
@@ -574,6 +614,11 @@ void EdfScheduler::SchedParamsCallback(Orchestrator& orch,
   }
 
   EdfTask* task = allocator()->GetTask(gtid);
+
+  if(!task){
+    task = findElement(sp->sid_);
+  }
+
   if (!task) {
     // We are too early (i.e. haven't seen MSG_TASK_NEW for gtid) in which
     // case ignore the update for now. We'll grab the latest SchedParams
@@ -858,14 +903,15 @@ void GlobalSatAgent::AgentThread() {
       global_scheduler_->GlobalSchedule(status_word(), agent_barrier);
 
       if (verbose() && debug_out.Edge()) {
-        static const int flags =
-            verbose() > 1 ? Scheduler::kDumpStateEmptyRQ : 0;
-        if (global_scheduler_->debug_runqueue_) {
-          global_scheduler_->debug_runqueue_ = false;
-          global_scheduler_->DumpState(cpu(), Scheduler::kDumpAllTasks);
-        } else {
-          global_scheduler_->DumpState(cpu(), flags);
-        }
+        static const int flags = verbose() > 1 ? Scheduler::kDumpStateEmptyRQ : 0;
+            global_scheduler_->DumpAllTasks();
+        //global_scheduler_->debug_runqueue_ = true;
+        //if (global_scheduler_->debug_runqueue_) {
+          //global_scheduler_->debug_runqueue_ = false;
+          //global_scheduler_->DumpState(cpu(), Scheduler::kDumpAllTasks);
+        //} else {
+           //global_scheduler_->DumpState(cpu(), flags);
+        //}
       }
     }
   }

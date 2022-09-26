@@ -42,13 +42,13 @@ class CpuState:
         self.agent = None
 
 class PyScheduler(ghost.BasicDispatchScheduler_PyTask_):
-    def __init__(self, enclave, cpulist, global_cpu, preemption_time_slice_):
+    def __init__(self, enclave, cpulist, global_cpu):
         self.allocator_ = ghost.SingleThreadMallocTaskAllocator_PyTask_()
         ghost.BasicDispatchScheduler_PyTask_.__init__(self, enclave, cpulist, self.allocator_)
         node = 0
         self.default_channel_ = ghost.LocalChannel(ghost.GHOST_MAX_QUEUE_ELEMS, node, ghost.GetEmptyCpuList())
         self.global_cpu = global_cpu
-        self.preemption_time_slice_ = preemption_time_slice_
+        #self.preemption_time_slice_ = preemption_time_slice_
         self.run_queue = queue.deque()
         self.blocked_queue = queue.deque()
         self.num_tasks_ = 0
@@ -192,6 +192,10 @@ class PyScheduler(ghost.BasicDispatchScheduler_PyTask_):
         payload = ghost.cast_payload_dead(msg.payload())
         if task.pydata.run_state == kBlocked:
             self.allocator().FreeTask(task)
+            if task in self.blocked_queue: self.blocked_queue.remove(task)
+            if task in self.yielding_tasks_: self.yielding_tasks_.remove(task)
+            if task in self.run_queue: self.run_queue.remove(task)
+            #self.blocked_queue.remove(task)
             self.num_tasks_ = self.num_tasks_ - 1
 
     def TaskYield(self, task, msg):
@@ -373,7 +377,7 @@ class PyAgent(ghost.LocalAgent):
 
                 msg = self.scheduler_.default_channel_.Peek()
                 while not msg.empty():
-                    print(msg.type())
+                    #print(msg.type())
                     self.scheduler_.DispatchMessage(msg)
                     self.scheduler_.default_channel_.Consume(msg)
                     msg = self.scheduler_.default_channel_.Peek()
@@ -387,8 +391,7 @@ class FullPyAgent(ghost.FullAgent_LocalEnclave_PyAgentConfig_):
     def __init__(self, config):
         ghost.FullAgent_LocalEnclave_PyAgentConfig_.__init__(self, config)
         global_cpu = ghost.GetCpu(1).id()
-        preemption_time_slice_ = 0.0010657310485839850
-        self.scheduler_ = PyScheduler(self.enclave_, self.enclave_.cpus(), global_cpu, preemption_time_slice_)
+        self.scheduler_ = PyScheduler(self.enclave_, self.enclave_.cpus(), global_cpu)
         self.StartAgentTasks()
         self.enclave_.Ready()
 
